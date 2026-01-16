@@ -1,0 +1,73 @@
+# Modified from https://gitlab.com/fedora/bootc/docs/-/blob/e046a20da7dc6d211d049b00902b24d2619dccc0/modules/ROOT/pages/experimental-building-sealed.adoc
+
+# The unsealed base image
+ARG base=localhost/silverblue-main-hardened-bootc:43
+# Buildroot for UKI build tools
+ARG buildroot=quay.io/fedora/fedora-bootc:43
+
+FROM $base AS base
+
+# Install build tools in a separate buildroot
+FROM $buildroot as buildroot-base
+RUN <<EORUN
+set -xeuo pipefail
+
+# systemd-udev provides systemd-measure for PCR measurements
+dnf install -y systemd-ukify systemd-udev pesign openssl \
+    systemd-boot-unsigned
+dnf clean all
+EORUN
+
+# Build the unsigned UKI
+FROM buildroot-base as kernel
+ARG COMPOSEFS_FSVERITY
+RUN --mount=type=bind,from=base,target=/target \
+     <<EOF
+    set -eux
+
+    test -n "${COMPOSEFS_FSVERITY}"
+    cmdline="composefs=${COMPOSEFS_FSVERITY} console=ttyS0,115200n8 rw"
+
+    kver=$(cd /target/usr/lib/modules && echo *)
+    ukify build \
+        --linux "/target/usr/lib/modules/$kver/vmlinuz" \
+        --initrd "/target/usr/lib/modules/$kver/initramfs.img" \
+        --uname="${kver}" \
+        --cmdline "${cmdline}" \
+        --os-release "@/target/usr/lib/os-release" \
+        --json pretty \
+        --output "/boot/$kver.efi"
+EOF
+
+# Assemble the final image
+FROM base as final
+
+RUN --mount=type=bind,from=kernel,target=/run/kernel <<EOF
+set -xeuo pipefail
+kver=$(cd /usr/lib/modules && echo *)
+
+mkdir -p /boot/EFI/Linux
+
+# We put the UKI in /boot for now due to composefs verity not being the
+# same due to mtime of /usr/lib/modules being changed
+target=/boot/EFI/Linux/$kver.efi
+cp /run/kernel/boot/$kver.efi $target
+
+# Remove the individual kernel/initramfs now that we have a UKI
+rm -v /usr/lib/modules/${kver}/{vmlinuz,initramfs.img}
+
+# Symlink from modules directory to the UKI
+ln -sr $target /usr/lib/modules/${kver}/$(basename $kver.efi)
+
+# Validate the sealed image
+# NO `--fatal-warnings` because `nonempty-boot` is a warning
+# but we need it for our UKI.
+bootc container lint
+EOF
+
+FROM base as final-final
+
+COPY --from=final /boot /boot
+# Override the default
+LABEL containers.bootc=sealed
+

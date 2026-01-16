@@ -1,0 +1,19 @@
+ARG upstream=ghcr.io/secureblue/silverblue-main-hardened:latest
+FROM $upstream
+
+# Install systemd-boot binaries.
+RUN --mount=type=tmpfs,target=/var \
+    dnf install -y systemd-boot-unsigned && \
+    dnf clean all
+
+# Regenerate initramfs to include bootc module.
+# mkdir line from https://github.com/ublue-os/titanoboa/blob/840217d97bd0bc9a52466508c54d8dda5c5ba2fd/Justfile#L161
+# kver line from https://github.com/bootc-dev/bootc/blob/e074a41720c7dc9c95ec6d1308ddf884cb91b240/contrib/packaging/install-rpm-and-setup#L13
+RUN --mount=type=tmpfs,dst=/var/tmp \
+    mkdir -p $(realpath /root) && \
+    kver=$(cd /usr/lib/modules && echo *) && \
+    dracut -f --add bootc "/usr/lib/modules/$kver/initramfs.img" "$kver"
+
+# Setup a temporary root password for testing.
+RUN echo "root:changeme" | chpasswd
+

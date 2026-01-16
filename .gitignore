@@ -1,0 +1,4 @@
+*.img
+OVMF_VARS.fd
+digest-for-reference.txt
+
