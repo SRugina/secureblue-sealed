@@ -4,6 +4,8 @@ An experiment in getting [secureblue](https://github.com/secureblue/secureblue/)
 to boot from a UKI via systemd-boot,
 with bootc's composefs native backend providing fs-verity.
 
+![Terminal showing `run0 bootc status` output with verity](./screenshot-qemu.png)
+
 Note: "sealed" is a slight misnomer, since the UKI and systemd-boot are not
 Secure Boot signed to keep the focus on the rest of the setup.
 
@@ -102,6 +104,12 @@ The following image-related environment variables can optionally be set:
 - Fix/investigate `securebluecleanup.service` failing.
 
   No logs in `systemctl status`, just `code=exited, status=1/FAILURE`
+- `/usr/etc/` does not exist, but /etc/ does and is populated correctly.
+  However, this breaks podman's `/etc/containers/policy.json`
+  since secureblue hardcodes the `keyPath`s to `/usr/etc/pki/containers/...`.
+  Presumably we need to populate `/usr/etc/` in `Containerfile.base`
+  if upstream image doesn't do it,
+  unless upstream does do it and it's bootc that is messing things up...
 - Compare with normal installation to check all customisations are applied properly,
   and all `ujust` stuff works.
 - Check journal for any other errors.
@@ -166,4 +174,12 @@ https://github.com/gerblesh/arch-bootc/tree/composefs-uki
 https://github.com/bootc-dev/bootc/blob/e074a41720c7dc9c95ec6d1308ddf884cb91b240/Dockerfile.cfsuki
 
 https://github.com/bootc-dev/bootc/blob/e074a41720c7dc9c95ec6d1308ddf884cb91b240/hack/build-sealed
+
+# Licenses
+
+- `./Containerfile.sealed` is covered by `./LICENSE-CC-BY-SA-3.0`,
+  since only minor modifications have been made.
+
+Any snippets copied from elsewhere are considered too small and/or general,
+so everything else falls under `./LICENSE` aka `./UNLICENSE`.
 
