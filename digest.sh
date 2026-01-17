@@ -10,8 +10,6 @@ podman pull $BOOTC_IMG
 
 BASE_IMG="${BASE_IMG:-${1:-localhost/silverblue-main-hardened-bootc:43}}"
 
-script_dir=$(cd $(dirname $0) && pwd)
-
 # Find the container storage.
 graphroot=$(podman system info -f '{{.Store.GraphRoot}}')
 echo "INFO: podman graphroot is $graphroot" >&2
