@@ -26,7 +26,9 @@ RUN --mount=type=bind,from=base,target=/target \
     set -eux
 
     test -n "${COMPOSEFS_FSVERITY}"
-    cmdline="composefs=${COMPOSEFS_FSVERITY} console=ttyS0,115200n8 rw"
+    # Per https://github.com/secureblue/secureblue/blob/740f448499bbf51199f09842b190699ff89d243a/files/system/usr/lib/bootc/kargs.d/10-secureblue.toml
+    secureblue_cmdline="$(python3 -c "import tomllib, sys; print(' '.join(tomllib.load(sys.stdin.buffer)['kargs']))" < /target/usr/lib/bootc/kargs.d/10-secureblue.toml)"
+    cmdline="composefs=${COMPOSEFS_FSVERITY} ${secureblue_cmdline} console=ttyS0,115200n8 console=tty0 enforcing=0 rw"
 
     kver=$(cd /target/usr/lib/modules && echo *)
     ukify build \

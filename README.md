@@ -15,9 +15,7 @@ boot chain than secureblue's GRUB flow.
 Ideally, the sealed image will be made by upstream and boot-time installers like
 Anaconda will have an option to use the `--composefs-backend` flag for their
 `bootc install` command.
-Also, the
-[compressed layers bug](https://github.com/bootc-dev/bootc/issues/1703#issuecomment-3562107282)
-would be fixed in bootc (or wherever the bug is).
+Also, the bugs in bootc, possibly podman, and systemd-boot would be fixed.
 It would be even better if `systemd-boot` wasn't used, and changes to boot order
 needed for updates were done by changing the UEFI boot order directly.
 
@@ -67,8 +65,8 @@ The following image-related environment variables can optionally be set:
 2. Execute `./to-disk-img.sh` to make a raw disk image for use as a VM,
    or `./to-disk.sh` to wipe & install on a block device.
 
-   This requires the use of `run0`, so you will be prompted for authentication
-   several times throughout, to copy the sealed image from your regular user's
+   This requires the use of `run0`, so there will be prompts for authentication
+   several times throughout, to copy the sealed image from the regular user's
    podman to rootful podman and then to install it.
 
    Due to the aforementioned
@@ -90,10 +88,34 @@ The following image-related environment variables can optionally be set:
 3. To check that it worked, execute `run0 bootc status` inside the system,
    and one should see the computed digest from earlier listed after "Verity: ".
 
+4. To be able to upgrade using the live system's own containers-storage
+   instead of a "remote" repo at localhost:80,
+   clone this repo on the live system, edit `/etc/containers/policy.json`
+   to allow `containers-storage` and `oci-archive` transports as well as
+   `ghcr.io` and `quay.io` under the `docker` transport
+   with `"type": "insecureAcceptAnything"`,
+   then run the `./build.sh` script,
+   then `./first-local-upgrade.sh`.
+
+   Now, check `run0 bootc status` to see the local image is "staged",
+   and if one has Secure Boot disabled on real hardware also
+   edit `/boot/loader/entries.staged/` to have the correct `options`
+   per [below section](#errors-that-might-be-due-to-secure-boot-being-disabled);
+   note that the verity for the new entry (`*-1.conf`) will be different
+   from the old entry, matching the new `.efi` filename.
+
+   Finally, reboot and pick the top option in systemd-boot's menu (`*-1.conf`).
+   Verify this worked by checking `run0 bootc status` and seeing both
+   "Booted image" and "Rollback image" with the right verities and timestamps.
+
+   This has switched bootc from using a remote registry to using your local
+   rootful  containers-storage, so any future use of `run0 bootc upgrade` will 
+   check there for any updates to the image, no remote registry needed
+   (useful for experimenting with this setup).
+
 # TODO
 
-- Check `run0 bootc upgrade` works (local registry and/or publish to GitHub).
-- Fix DNS not working initially.
+- Fix DNS not working out of the box.
 	- `dnsconfd.service` failing.
 	- Note that manually doing `ujust dns-selector` fixes DNS.
 - Fix/investigate `bootloader-update.service` failing. Error is:
@@ -101,20 +123,46 @@ The following image-related environment variables can optionally be set:
   bootupctl[1033]: error: get parent devices: get parent devices from mount point boot or sysroot: While looking for backing devices of systemd-1: Subprocess failed: ExitStatus(unix_wait_status(8192))
   bootupctl[1033]: lsblk: systemd-1: not a block device
   ```
-- Fix/investigate `securebluecleanup.service` failing.
+- Fix/investigate `securebluecleanup.service` and
+  `secureblue-flatpak-setup.service` failing.
 
   No logs in `systemctl status`, just `code=exited, status=1/FAILURE`
-- `/usr/etc/` does not exist, but /etc/ does and is populated correctly.
+- `/usr/etc/` does not exist, but `/etc/` does and is populated correctly.
   However, this breaks podman's `/etc/containers/policy.json`
   since secureblue hardcodes the `keyPath`s to `/usr/etc/pki/containers/...`.
-  Presumably we need to populate `/usr/etc/` in `Containerfile.base`
-  if upstream image doesn't do it,
-  unless upstream does do it and it's bootc that is messing things up...
+
+  This is a bug in bootc, file an issue if it does not exist, since the
+  [docs](https://github.com/bootc-dev/bootc/blob/d5c6515e237d7e8b9b1e385fbc393e8c517eafad/docs/src/filesystem.md?plain=1#L107-L112)
+  say "Do *not* explicitly put files into this location, it can create undefined behavior"
+  so we can't copy `/etc/` to `/usr/etc/` ourselves in `./Containerfile.sealed`.
+- Fix `firewalld.service` sometimes failing.
+  Error was:
+  ```
+  firewalld.service: start opteration timed out. Terminating.
+  firewalld.service: Failed with result 'timeout'.
+  ```
+  Only occured after rebooting after running `./first-local-upgrade.sh`,
+  another reboot after and it was fine again...
+- `run0 setenforce 1` breaks everything, hence why `enforcing=0`
+  is added to kernel cmdline in `./Containerfile.sealed` until this is fixed.
+
+  `journalctl -b` shows several:
+  ```
+  audit[...] AVC avc: denied { read } for pid=... comm="pkla-check-auth" path="/48/..." dev="sda3" ino=44664 scontext=system_u:system_r:policykit_auth_t:s0 tcontext=system_u:object_r:unlabeled_t:s0 tclass=file permissive=0
+  polkitd[1077] Error evaluating admin rules: Error: Helper exited with non-zero exit status 127, stdout=`', stderr=`/usr/bin/pkla-check-authorization: error while loading shared libraries: /lib64/libc.so.6: cannot apply additional memory protection after relocation: Permission denied
+  ```
+
+  Upstream are aware of this bug in bootc/composefs-fs,
+  see https://github.com/bootc-dev/bootc/issues/1826
+- Figure out how `ujust set-kargs-hardening` will make UKI addons to edit the UKI
+  cmdline per additional options at https://secureblue.dev/articles/kargs
+- `ujust audit-secureblue` many errors but does still finish and provide some
+  recommendations.
 - Compare with normal installation to check all customisations are applied properly,
   and all `ujust` stuff works.
 - Check journal for any other errors.
 
-Errors specific to real hardware install via `./to-disk.sh`:
+## Errors Specific to Real Hardware Install via `./to-disk.sh`
 
 - `plymouth-quit-wait.service` takes ~1min on first boot, subsequent ~18s.
 - All `*.device` take ~9s on first boot,
@@ -130,7 +178,7 @@ Errors specific to real hardware install via `./to-disk.sh`:
   when booting directly from the UKI in `/EFI/Linux/bootc/`
   or from systemd-boot's auto-detected UKI if it's copied to `/EFI/Linux/`,
   but works properly when booting from corrected entry w/ options
-  (see "Errors that might be due to Secure Boot being disabled" list below).
+  (see [below section](#errors-that-might-be-due-to-secure-boot-being-disabled)).
 
   This is because the EFI variable checked
   [here](https://github.com/bootc-dev/bootc/blob/315bfb3cfd52ff169a03422cde1dfa2869c6b1c9/crates/lib/src/bootc_composefs/status.rs#L220)
@@ -139,12 +187,12 @@ Errors specific to real hardware install via `./to-disk.sh`:
   to detect that systemd-stub is being used, maybe?
   Depends on if that still contains "systemd" somewhere in it
   when GRUB(+UKI) is used...
-  This should be filed as a bug with bootc if it does not exist,
+  This should be filed as a bug with `bootc status` if it does not already exist,
   as it needs to handle direct-from-UKI & systemd-boot's auto-detected UKIs
   separately from GRUB and systemd-boot
   (i.e. condition is LoaderInfo not set but StubInfo contains "systemd-stub").
 
-Errors that might be due to Secure Boot being disabled:
+## Errors that Might be Due to Secure Boot being Disabled
 
 - Cannot boot from `/EFI/BOOT/BOOTX64.EFI` or `/EFI/systemd/systemd-bootx64.efi`
   (blank screen, fans pick up for a while, then device powers off),
@@ -154,16 +202,18 @@ Errors that might be due to Secure Boot being disabled:
   `/boot/loader/loader.conf` with an entry for the UKI, but selecting it still
   leads to a power off.
 
-  Copying the UKI from `/EFI/Linux/bootc/` allows systemd-boot to auto-detect
-  it, and this boot entry does work from the systemd-boot menu.
+  Copying the UKI from `/EFI/Linux/bootc/` to `/EFI/Linux/` allows systemd-boot
+  to auto-detect it, and this boot entry does work from the systemd-boot menu.
   Pressing `p` in the systemd-boot menu shows systemd-boot sees the cmdline
-  for the auto-detected entry, but not for the manual entry.
+  for the auto-detected entry, but not for the `/boot/loader/entries/` entry.
 
-  Editing `/boot/loader/entries/` with `options ...` from `/proc/cmdline`
+  Editing `/boot/loader/entries/` entry with `options ...` from `/proc/cmdline`
   works.
   This might be because
   "When Secure Boot is not active, the options passed via the command line override the embedded .cmdline"
-  per [arch wiki](https://wiki.archlinux.org/title/Systemd-boot#Unified_kernel_images:~:text=When%20Secure%20Boot%20is%20not%20active)
+  per [arch wiki](https://wiki.archlinux.org/title/Systemd-boot#Unified_kernel_images:~:text=When%20Secure%20Boot%20is%20not%20active),
+  i.e. systemd-boot is passing an empty command line which overrides embedded.
+  File a bug with systemd-boot if it doesn't already exist?
 
 # References
 
