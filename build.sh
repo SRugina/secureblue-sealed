@@ -30,7 +30,7 @@ CFS_DIGEST="${CFS_DIGEST:-$(SKIP_DECOMPRESS=${SKIP_DECOMPRESS:-} "$script_dir"/d
 echo "."
 echo "."
 echo "."
-echo "$CFS_DIGEST" > "script_dir"/digest-for-reference.txt
+echo "$CFS_DIGEST" > "$script_dir"/digest-for-reference.txt
 echo "$CFS_DIGEST"
 echo "."
 echo "."
